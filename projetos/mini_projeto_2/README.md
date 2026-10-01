@@ -5,7 +5,7 @@ Autor: José Artur Soares Afreu
 
 [![Abrir no Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1BESP5oRvEhL_NjkkwsTFVjiw81xBhGgU?usp=sharing)
 
-Controlador **fuzzy (Mamdani)** em Python com `scikit-fuzzy` que decide **quantos mililitros de água** dar a um vaso, a partir da **umidade do solo** e da **radiação solar** que o vaso recebe. É a evolução do [Mini-Projeto 1](../mini_projeto_1/) (regras crisp com Experta): o domínio é o mesmo, o cultivo residencial em vasos, mas a decisão de rega deixa de ser um rótulo e passa a ser uma dosagem contínua.
+Controlador **fuzzy (Mamdani)** em Python com `scikit-fuzzy` que decide **quantos mililitros de água** dar a um vaso, a partir da **umidade do solo** e da **radiação solar** que o vaso recebe. É a evolução do [Mini-Projeto 1](../mini_projeto_1/) (regras crisp com Experta): o domínio é o mesmo, o cultivo residencial em vasos, mas a decisão de rega deixa de ser um rótulo e passa a ser uma dosagem contínua, que inclui a possibilidade de **suspender a rega**.
 
 ## Índice
 
@@ -43,7 +43,7 @@ O controlador segue o método de **Mamdani**, em cinco passos:
         │
         ▼
  2. Avaliação das regras      cada regra calcula seu grau de ativação α
-        │                     (o "E" é o mínimo dos graus)
+        │                     ("E" = mínimo dos graus; "OU" = máximo)
         ▼
  3. Implicação                o conjunto de saída de cada regra é cortado em α
         │
@@ -51,7 +51,7 @@ O controlador segue o método de **Mamdani**, em cinco passos:
  4. Agregação                 os conjuntos cortados são unidos pelo máximo
         │
         ▼
- 5. Defuzzificação            centroide da área agregada  →  385,70 ml
+ 5. Defuzzificação            centroide da área agregada  →  347,17 ml
 ```
 
 Na implementação com `scikit-fuzzy`:
@@ -66,11 +66,13 @@ Na implementação com `scikit-fuzzy`:
 
 ## 3. Variáveis linguísticas e funções de pertinência
 
-| Tipo | Variável | Universo | Termos |
+| Tipo | Variável | Universo (resolução) | Termos |
 |---|---|---|---|
-| Entrada | `umidade` (solo) | 0 a 100 % | `seco`, `ideal`, `encharcado` |
-| Entrada | `radiacao` (sol direto) | 0 a 10 h/dia | `baixa`, `moderada`, `intensa` |
-| Saída | `rega` (volume por vaso) | 0 a 600 ml | `baixa`, `moderada`, `abundante` |
+| Entrada | `umidade` (solo) | 0 a 100 % (1 %) | `seco`, `ideal`, `encharcado` |
+| Entrada | `radiacao` (sol direto) | 0 a 10 h/dia (0,1 h) | `baixa`, `moderada`, `intensa` |
+| Saída | `rega` (volume por vaso) | 0 a 600 ml (1 ml) | `nula`, `baixa`, `moderada`, `abundante` |
+
+A radiação usa passos de 0,1 h para evitar distorções nos trapézios, cujos vértices caem em valores decimais (1,5 h, 3,5 h, 6,5 h...).
 
 | Variável | Termo | Forma | Parâmetros | Significado no domínio |
 |---|---|---|---|---|
@@ -80,11 +82,14 @@ Na implementação com `scikit-fuzzy`:
 | radiacao | baixa | trapezoidal | [0, 0, 1.5, 3.5] | sombra (janela fumê) |
 | radiacao | moderada | triangular | [2.5, 5.0, 7.5] | meia-sombra |
 | radiacao | intensa | trapezoidal | [6.5, 8.5, 10, 10] | sol pleno |
+| rega | nula | triangular | [0, 0, 1] | suspensão da rega |
 | rega | baixa | trapezoidal | [0, 0, 100, 200] | rega de manutenção |
 | rega | moderada | triangular | [150, 300, 450] | rega intermediária |
 | rega | abundante | trapezoidal | [400, 500, 600, 600] | reposição alta |
 
-**Por que três termos por variável?** Cada variável precisa distinguir os dois extremos que exigem ação oposta (falta e excesso de água, pouco e muito sol) e um estado intermediário.
+**Por que três termos nas entradas?** Cada entrada precisa distinguir os dois extremos que exigem ação oposta (falta e excesso de água, pouco e muito sol) e um estado intermediário.
+
+**Por que quatro termos na saída?** Além dos três níveis de dosagem (baixa, moderada, abundante), o domínio precisa expressar a **suspensão da rega**: com o solo encharcado e sem sol para evaporar, a decisão correta é não regar. O termo `nula` é um triângulo estreito ancorado em 0 ml, de modo que a defuzzificação aponta para praticamente nenhuma água (≈ 0,33 ml).
 
 **Por que trapézios nos extremos e triângulos no meio?** Os trapézios criam um **platô de pertinência máxima** nas condições de perigo, em que a resposta do sistema precisa ser firme (solo muito seco, solo encharcado, sol pleno). O estado intermediário é um ponto de equilíbrio, representado por um triângulo com um único pico.
 
@@ -104,21 +109,25 @@ Com 2 variáveis e 3 termos cada, a grade completa tem 3² = **9 regras**. Todas
 
 | Umidade \ Radiação | Baixa | Moderada | Intensa |
 |---|---|---|---|
-| **Seco** | moderada (R3) | abundante (R2) | abundante (R1) |
+| **Seco** | moderada (R3, via OU) | abundante (R2) + moderada (R3, via OU) | abundante (R1) |
 | **Ideal** | baixa (R6) | baixa (R5) | moderada (R4) |
-| **Encharcado** | baixa (R9) | baixa (R8) | baixa (R7) |
+| **Encharcado** | **nula** (R9) | baixa (R8) | baixa (R7) |
 
 | R | Umidade | Radiação | Rega | Justificativa agronômica |
 |:-:|:-:|:-:|:-:|:--|
 | 1 | seco | intensa | abundante | Solo ressecado e calor intenso exigem hidratação emergencial. |
 | 2 | seco | moderada | abundante | Solo crítico precisa de alta reposição mesmo fora do sol pleno. |
-| 3 | seco | baixa | moderada | Evaporação lenta; irrigação abundante causaria acúmulo de água no fundo. |
+| 3 | seco | **baixa OU moderada** | moderada | Com pouco sol a evaporação é lenta e uma rega abundante acumularia água no fundo do vaso. O `OU` estende a regra ao sol moderado, como uma rede de segurança que modera a reposição. |
 | 4 | ideal | intensa | moderada | Sol forte consome as reservas rápido; exige manutenção protetiva. |
 | 5 | ideal | moderada | baixa | Condição de equilíbrio; apenas manutenção leve. |
 | 6 | ideal | baixa | baixa | A sombra mantém o solo fresco; intervenção mínima. |
-| 7 | encharcado | intensa | baixa | Excesso de água; conta-se com o sol para secar naturalmente. |
-| 8 | encharcado | moderada | baixa | Risco alto de asfixia das raízes; reduzir ao mínimo o fluxo. |
-| 9 | encharcado | baixa | baixa | Cenário crítico para mofo; aplicar o mínimo que o modelo recomenda. |
+| 7 | encharcado | intensa | baixa | Excesso de água; o sol seca o solo naturalmente, então apenas uma rega baixa, para manter a hidratação foliar. |
+| 8 | encharcado | moderada | baixa | Risco de asfixia das raízes; apenas uma rega baixa, para manter a hidratação foliar. |
+| 9 | encharcado | baixa | **nula** | Sem sol para evaporar, o solo não perde água: **suspender a rega** evita o apodrecimento e o mofo. |
+
+**Operadores.** O `&` (E) de cada regra usa o **mínimo** dos graus de pertinência. O `|` (OU), usado na R3, extrai o **máximo** entre os graus antes de avaliar o mínimo geral da regra.
+
+**Regras que disparam juntas.** Na região "solo seco × sol moderado", as regras R2 e R3 são ativadas ao mesmo tempo, com consequentes diferentes (abundante e moderada). Em vez de uma escolher entre as duas, o sistema combina os dois conjuntos de saída e a defuzzificação devolve um valor de compromisso. É o comportamento esperado do Mamdani, em que o disparo paralelo de regras faz parte do método.
 
 ## 5. Casos de teste e resultados
 
@@ -128,23 +137,35 @@ A função `testar_oraculo_fuzzy(nome_teste, umi_val, rad_val)` executa uma infe
 |---|---|---|---|
 | 1. Seca severa + sol intenso | umidade 10 %, radiação 9 h | R1 (α = 1) → abundante | **522,22 ml** |
 | 2. Condições ideais | umidade 50 %, radiação 5 h | R5 (α = 1) → baixa | **77,78 ml** |
-| 3. Transição | umidade 30 %, radiação 5 h | R2 (α = 0,5) → abundante; R5 (α = 0,2) → baixa | **385,70 ml** |
+| 3. Transição | umidade 30 %, radiação 5 h | R2 (α = 0,5) → abundante; R3 (α = 0,5) → moderada; R5 (α = 0,2) → baixa | **347,17 ml** |
+| 4. Suspensão da rega | umidade 90 %, radiação 1 h | R9 (α = 1) → nula | **0,33 ml** |
 
 **Interpretação:**
 
 - **Teste 1:** o solo é totalmente "seco" e o sol totalmente "intenso", então só a R1 dispara, com força máxima. A saída é o centro de massa do conjunto "abundante" inteiro: cerca de meio litro por vaso.
 - **Teste 2:** o solo está no pico de "ideal" e o sol no pico de "moderada". Só a R5 dispara, e a saída é o centro de massa de "baixa" inteiro: rega de manutenção.
-- **Teste 3:** o solo é parcialmente seco (0,5) e parcialmente ideal (0,2), então **duas regras que discordam disparam juntas**. A R2 pede rega abundante com força 0,5 e a R5 pede rega baixa com força 0,2. O sistema as combina e devolve um valor intermediário, mais próximo de "abundante" porque essa regra tem mais força. O resultado cai na região de "moderada", embora nenhuma regra peça "moderada".
+- **Teste 3:** o solo é parcialmente seco (0,5) e parcialmente ideal (0,2), e o sol é totalmente "moderado". **Três regras disparam juntas:** a R2 pede rega abundante e a R3 pede rega moderada, ambas com força 0,5, e a R5 pede rega baixa com força 0,2. O sistema combina os três conjuntos cortados e devolve um valor intermediário (347,17 ml), na região de "moderada" e puxado para cima pela parcela "abundante".
+- **Teste 4:** o solo está encharcado e quase não há sol. A R9 dispara com força máxima e a saída é o centroide do triângulo estreito "nula" ([0, 0, 1] ⇒ 1/3 ml ≈ 0,33 ml). Na prática, o sistema recomenda **suspender a rega**.
 
-### Defuzzificação do teste 3
+### Defuzzificação dos testes
 
-A área colorida é a agregação dos conjuntos de saída cortados em α ("abundante" em 0,5 e "baixa" em 0,2). A linha vertical preta marca o centroide, o volume de rega recomendado.
+Em cada gráfico, a área colorida é a agregação dos conjuntos de saída cortados em α, e a linha vertical preta marca o centroide, o volume de rega recomendado.
 
-![Defuzzificação pelo centroide](img/defuzzificacao.png)
+**Teste 1** (seca severa + sol intenso): só "abundante" está ativo, cortado em 1.
+
+![Defuzzificação do teste 1](img/defuzzificacao_teste1.png)
+
+**Teste 2** (condições ideais): só "baixa" está ativo, cortado em 1.
+
+![Defuzzificação do teste 2](img/defuzzificacao_teste2.png)
+
+**Teste 3** (transição): "abundante" e "moderada" cortados em 0,5 e "baixa" em 0,2.
+
+![Defuzzificação do teste 3](img/defuzzificacao_teste3.png)
 
 ### Teste personalizado
 
-O notebook tem uma célula em que você escolhe os valores. Com os padrões (umidade 65 %, radiação 7 h), quatro regras disparam ao mesmo tempo (R4, R5, R7 e R8) e a saída é **215,86 ml**.
+O notebook tem uma célula em que você escolhe os valores de umidade e de radiação. Com os valores que vêm preenchidos (umidade 90 %, radiação 10 h), apenas a R7 dispara (solo encharcado com sol intenso) e a saída é **77,78 ml**. Como outro exemplo, com umidade 65 % e radiação 7 h quatro regras disparam ao mesmo tempo (R4, R5, R7 e R8) e a saída é **215,86 ml**.
 
 ## 6. MP1 × MP2: regras crisp vs. fuzzy
 
@@ -154,21 +175,22 @@ O [MP1](../mini_projeto_1/) era um SBC em Experta, com encadeamento progressivo,
 |---|---|---|
 | Decisões | cinco: local, substrato, rega, vaso e NPK | uma: volume de rega |
 | Entradas | categorias prontas (luz, umidade, drenagem, tamanho, produção...) | dois valores numéricos de sensor |
-| Saída da rega | três rótulos (frequente, moderada, espaçada: R7 a R9) | contínua, de 0 a 600 ml |
+| Saída da rega | três rótulos (frequente, moderada, espaçada: R7 a R9) | contínua, de 0 a 600 ml (inclui a suspensão da rega) |
 | Regras | 22, em 3 níveis de encadeamento | 9, grade 3×3 completa |
 | Fronteiras | salto entre categorias (drenagem média gera uma receita, alta gera outra) | transição gradual por graus de pertinência |
 | Conflito entre regras | `salience` (500, 320, 315, 300) e `NOT` (R10 a R12, R18, R21 e R22) | nenhum: o disparo de várias regras ao mesmo tempo é o funcionamento normal |
 | Explicabilidade | rastro (*trace*) das regras disparadas | regras, graus de ativação (α) e gráfico da agregação |
 
-**Expressividade.** No MP1 a tradução do mundo para categorias era feita pelo usuário, e cruzar a fronteira entre duas categorias mudava a resposta de uma vez. No MP2 a entrada são números de sensor e a tradução para "seco", "ideal" ou "encharcado" acontece dentro do sistema, em graus. A saída deixa de ser um rótulo e passa a ser qualquer valor entre 0 e 600 ml. E, no teste 3, duas regras discordantes resultam em uma dose intermediária, sem precisar de prioridades.
+**Expressividade.** No MP1 a tradução do mundo para categorias era feita pelo usuário, e cruzar a fronteira entre duas categorias mudava a resposta de uma vez. No MP2 a entrada são números de sensor e a tradução para "seco", "ideal" ou "encharcado" acontece dentro do sistema, em graus. A saída deixa de ser um rótulo e passa a ser qualquer valor entre 0 e 600 ml. E, no teste 3, três regras com consequentes diferentes disparam juntas e resultam em uma dose intermediária, sem precisar de prioridades.
 
-**Complexidade.** Comparar 22 regras com 9 engana: o MP1 decide cinco coisas e o MP2 decide uma. Olhando só a rega, eram 3 regras no MP1 e são 9 no MP2, porque entrou uma segunda variável. O que muda é o que as regras entregam. Em versão crisp, as mesmas 9 regras produziriam só três níveis de saída; aproximar a suavidade do fuzzy com regras crisp exigiria dividir cada variável em muitas faixas (com dez faixas em cada, por exemplo, seriam 100 regras). O fuzzy cobra o seu preço em outro lugar: a **calibração das funções de pertinência**, e o número de regras cresce como kⁿ (k termos, n variáveis) quando entram novas entradas.
+**Complexidade.** Comparar 22 regras com 9 engana: o MP1 decide cinco coisas e o MP2 decide uma. Olhando só a rega, eram 3 regras no MP1 e são 9 no MP2, porque entrou uma segunda variável. O que muda é o que as regras entregam. Em versão crisp, as mesmas 9 regras produziriam só quatro níveis de saída; aproximar a suavidade do fuzzy com regras crisp exigiria dividir cada variável em muitas faixas (com dez faixas em cada, por exemplo, seriam 100 regras). O fuzzy cobra o seu preço em outro lugar: a **calibração das funções de pertinência**, e o número de regras cresce como kⁿ (k termos, n variáveis) quando entram novas entradas.
 
 **Quando cada um serve.** Para decisões discretas ("janela fumê ou piso da varanda", "qual vaso"), regras crisp são o caminho natural: não existe 40 % de janela fumê. As exceções com limite bem definido, como o cultivo em água do MP1, funcionam como *guardrails* que precisam disparar sempre. O fuzzy se destaca em grandezas contínuas, como o volume de água. Em um sistema completo, as duas abordagens se complementam.
 
 ## 7. Limitações
 
-- **Piso de ≈ 77,78 ml.** Esse é o centroide do conjunto "baixa" inteiro e, portanto, o menor volume que o sistema consegue recomendar. Qualquer cenário em que só "baixa" dispara com força máxima, como solo encharcado (umidade 85 %, radiação 1 h), devolve exatamente o mesmo valor do teste 2. O modelo distingue *regar muito* de *regar pouco*, mas não distingue *manutenção* de *suspender a rega*. Uma melhoria seria criar um termo de saída "nula" para o solo encharcado.
+- **A suspensão da rega só ocorre em um cenário.** O termo `nula` eliminou o piso de ≈ 77,78 ml da primeira versão (agora o mínimo é ≈ 0,33 ml), mas ele só é ativado pela R9 (solo encharcado e pouco sol). Com solo encharcado e sol moderado ou intenso (R8 e R7), a saída continua sendo "baixa": por exemplo, umidade 90 % e radiação 10 h devolvem 77,78 ml. Estender o termo `nula` a essas regras seria o próximo passo.
+- **Sobreposição das regras R2 e R3.** Com solo seco e sol moderado, as duas regras disparam juntas e a saída é um compromisso entre "abundante" e "moderada" (por exemplo, umidade 10 % e radiação 5 h dão 410,90 ml). A reposição máxima, de cerca de 522 ml, só aparece com sol intenso.
 - **Parâmetros definidos por conhecimento de domínio.** As curvas e as regras foram modeladas pelo autor e não foram calibradas com dados reais de sensores. Técnicas como o ANFIS poderiam ajustá-las a partir de dados.
 - **Perfil da planta fora do escopo.** O MP1 usava drenagem, porte e produção da planta. Aqui o foco é a dosagem, então espécies diferentes recebem a mesma resposta para as mesmas leituras. Também não entram temperatura nem previsão de chuva.
 - **Crescimento das regras.** Com mais entradas, a base cresce como kⁿ (uma terceira variável com 3 termos levaria a 27 regras).
@@ -223,10 +245,14 @@ Saída Defuzzificada (Centroide): 77.78 ml de água
 
 --- TESTE: Solo Parcialmente Seco + Meia-sombra (Transição) ---
 Entradas: Umidade = 30%, Radiação = 5h
-Saída Defuzzificada (Centroide): 385.70 ml de água
+Saída Defuzzificada (Centroide): 347.17 ml de água
+
+--- TESTE: Solo Encharcado + Radiação Baixa (Rega Nula) ---
+Entradas: Umidade = 90%, Radiação = 1h
+Saída Defuzzificada (Centroide): 0.33 ml de água
 ```
 
-A célula de gráficos (seção 4) gera os quatro gráficos e os salva em `img/` (`umidade.png`, `radiacao.png`, `rega.png` e `defuzzificacao.png`). A célula de teste personalizado (seção 5), com os valores padrão, imprime `215.86 ml`.
+A célula de gráficos (seção 4) gera os gráficos e os salva em `img/` (`umidade.png`, `radiacao.png`, `rega.png` e `defuzzificacao_teste1.png` a `defuzzificacao_teste4.png`). A célula de teste personalizado (seção 5), com os valores que vêm preenchidos (90 % e 10 h), imprime `77.78 ml`.
 
 ### Organização do notebook
 
@@ -235,8 +261,8 @@ A célula de gráficos (seção 4) gera os quatro gráficos e os salva em `img/`
 | Introdução e preparação | contexto, tabela de variáveis e instalação das dependências |
 | 1. Modelagem do domínio | variáveis linguísticas e funções de pertinência |
 | 2. Base de regras | as 9 regras, o `ControlSystem` e a simulação |
-| 3. Casos de teste | a função `testar_oraculo_fuzzy` e os três testes |
-| 4. Visualização gráfica | os 4 gráficos (3 de pertinência e 1 de defuzzificação) |
+| 3. Casos de teste | a função `testar_oraculo_fuzzy` e os quatro testes |
+| 4. Visualização gráfica | gráficos das funções de pertinência e da defuzzificação de cada teste |
 | 5. Testes personalizados | célula para testar valores próprios |
 
 ## 9. Estrutura do repositório
@@ -249,7 +275,10 @@ mini_projeto_2/
     ├── umidade.png
     ├── radiacao.png
     ├── rega.png
-    └── defuzzificacao.png
+    ├── defuzzificacao_teste1.png
+    ├── defuzzificacao_teste2.png
+    ├── defuzzificacao_teste3.png
+    └── defuzzificacao_teste4.png
 ```
 
 ## 10. Referências
